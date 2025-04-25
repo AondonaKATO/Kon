@@ -65,6 +65,8 @@
 
     let conn, connections = {}, myStream, currentCall;
     let cameraOn = true;
+    const ringtone = new Audio("https://www.soundjay.com/button/beep-06.mp3");
+    ringtone.loop = true;
 
     peer.on("open", id => {
       document.getElementById("myPeerId").value = id;
@@ -174,15 +176,28 @@
       } catch (err) {
         alert("Camera/microphone access denied");
       }
+
+      if (Notification.permission !== "granted" && Notification.permission !== "denied") {
+        Notification.requestPermission();
+      }
     }
 
     function handleIncomingCall(call) {
       notifyUser("Incoming call from: " + call.peer);
-      call.answer(myStream);
-      currentCall = call;
-      call.on("stream", stream => {
-        document.getElementById("remoteVideo").srcObject = stream;
-      });
+      ringtone.play();
+
+      const accept = confirm(`Incoming video call from ${call.peer}. Accept?`);
+      if (accept) {
+        ringtone.pause();
+        call.answer(myStream);
+        currentCall = call;
+        call.on("stream", stream => {
+          document.getElementById("remoteVideo").srcObject = stream;
+        });
+      } else {
+        ringtone.pause();
+        call.close();
+      }
     }
 
     function startVideoCall() {
@@ -220,12 +235,8 @@
     function notifyUser(message) {
       if (Notification.permission === "granted") {
         new Notification("Peer App", { body: message });
-      } else if (Notification.permission !== "denied") {
-        Notification.requestPermission().then(permission => {
-          if (permission === "granted") {
-            new Notification("Peer App", { body: message });
-          }
-        });
+      } else {
+        alert(message);
       }
     }
 
