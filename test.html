@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>P2P Video Chat App</title>
+  <script src="https://unpkg.com/peerjs@1.3.2/dist/peerjs.min.js"></script>
+  <style>
+    video { width: 300px; height: 200px; margin: 10px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+  </style>
+</head>
+<body>
+  <h2>P2P Video Chat, File Share, Messaging</h2>
+  <div>
+    <label>Your Peer ID:</label>
+    <input id="myPeerId" readonly>
+    <img id="qrCode" alt="QR Code">
+    <div id="status"></div>
+  </div>
+  <div>
+    <input id="connectToId" placeholder="Enter Peer ID to connect">
+    <button onclick="manualConnect()">Connect</button>
+  </div>
+
+  <select id="peerList"></select>
+  <hr>
+
+  <button onclick="switchTab('chatTab')">Chat</button>
+  <button onclick="switchTab('fileTab')">File Share</button>
+  <button onclick="switchTab('videoTab')">Video Call</button>
+
+  <div id="chatTab" class="tab-content active">
+    <h3>Chat</h3>
+    <div id="chatMessages" style="border:1px solid #ccc; height:100px; overflow:auto;"></div>
+    <input id="chatInput" placeholder="Message">
+    <button onclick="sendMessage()">Send</button>
+  </div>
+
+  <div id="fileTab" class="tab-content">
+    <h3>File Sharing</h3>
+    <input type="file" id="fileInput">
+    <button onclick="sendFile()">Send File</button>
+    <button onclick="startBluetoothShare()">Bluetooth Share</button>
+  </div>
+
+  <div id="videoTab" class="tab-content">
+    <h3>Video Call</h3>
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video><br>
+    <button onclick="startVideoCall()">Call</button>
+    <button onclick="endCall()">End Call</button>
+    <button id="toggleCameraBtn" onclick="toggleCamera()">Turn Off Camera</button>
+  </div>
+
+  <script>
+    const peer = new Peer({
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'turn:relay.metered.ca:80', username: 'user', credential: 'pass' }
+        ]
+      }
+    });
+
+    let conn, connections = {}, myStream, currentCall;
+    let cameraOn = true;
+
+    peer.on("open", id => {
+      document.getElementById("myPeerId").value = id;
+      document.getElementById("status").innerText = `Your ID: ${id}`;
+      document.getElementById("qrCode").src = `https://chart.googleapis.com/chart?cht=qr&chs=200x200&chl=${id}`;
+    });
+
+    peer.on("connection", setupConnection);
+    peer.on("call", handleIncomingCall);
+
+    function setupConnection(connection) {
+      connection.on("open", () => {
+        connections[connection.peer] = connection;
+        updatePeerList();
+        connection.on("data", data => {
+          if (data.type === "text") {
+            appendChatMessage(`Peer: ${data.message}`);
+          } else if (data.file) {
+            receiveFile(data);
+          }
+        });
+      });
+    }
+
+    function updatePeerList() {
+      const list = document.getElementById("peerList");
+      list.innerHTML = "";
+      Object.keys(connections).forEach(peerId => {
+        let option = document.createElement("option");
+        option.value = peerId;
+        option.textContent = peerId;
+        list.appendChild(option);
+      });
+    }
+
+    function manualConnect() {
+      const peerId = document.getElementById("connectToId").value.trim();
+      if (!peerId) return alert("Enter a valid Peer ID");
+      if (connections[peerId]) return alert("Already connected");
+
+      const connection = peer.connect(peerId);
+      setupConnection(connection);
+    }
+
+    function sendMessage() {
+      const msg = document.getElementById("chatInput").value.trim();
+      const peerId = document.getElementById("peerList").value;
+      const conn = connections[peerId];
+      if (msg && conn && conn.open) {
+        conn.send({ type: "text", message: msg });
+        appendChatMessage(`You: ${msg}`);
+        document.getElementById("chatInput").value = "";
+      }
+    }
+
+    function appendChatMessage(text) {
+      const chatBox = document.getElementById("chatMessages");
+      const msg = document.createElement("div");
+      msg.textContent = text;
+      chatBox.appendChild(msg);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function receiveFile(data) {
+      const blob = new Blob([data.file], { type: data.type });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = data.name;
+      a.textContent = `Download ${data.name}`;
+      document.body.appendChild(a);
+      document.getElementById("status").innerText = `Received file: ${data.name}`;
+    }
+
+    function sendFile() {
+      const fileInput = document.getElementById("fileInput");
+      const file = fileInput.files[0];
+      const peerId = document.getElementById("peerList").value;
+      const conn = connections[peerId];
+
+      if (!file || !conn || !conn.open) return alert("No file selected or peer not connected");
+
+      const reader = new FileReader();
+      reader.onload = e => {
+        conn.send({ name: file.name, type: file.type, file: e.target.result });
+        document.getElementById("status").innerText = `Sent: ${file.name}`;
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function startBluetoothShare() {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) return alert("Select a file first.");
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: "File Sharing" })
+          .then(() => document.getElementById("status").innerText = "Bluetooth file sharing successful.")
+          .catch(console.error);
+      } else {
+        alert("Bluetooth sharing not supported.");
+      }
+    }
+
+    async function initMedia() {
+      try {
+        myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById("localVideo").srcObject = myStream;
+      } catch (err) {
+        alert("Camera/microphone access denied");
+      }
+    }
+
+    function handleIncomingCall(call) {
+      notifyUser("Incoming call from: " + call.peer);
+      call.answer(myStream);
+      currentCall = call;
+      call.on("stream", stream => {
+        document.getElementById("remoteVideo").srcObject = stream;
+      });
+    }
+
+    function startVideoCall() {
+      const peerId = document.getElementById("connectToId").value.trim();
+      if (!peerId || !myStream) return alert("Missing Peer ID or camera not active");
+      const call = peer.call(peerId, myStream);
+      currentCall = call;
+      call.on("stream", stream => {
+        document.getElementById("remoteVideo").srcObject = stream;
+      });
+    }
+
+    function endCall() {
+      if (currentCall) {
+        currentCall.close();
+        currentCall = null;
+        document.getElementById("remoteVideo").srcObject = null;
+      }
+    }
+
+    function toggleCamera() {
+      if (!myStream) return;
+      myStream.getVideoTracks().forEach(track => {
+        track.enabled = !track.enabled;
+        cameraOn = track.enabled;
+      });
+      document.getElementById("toggleCameraBtn").textContent = cameraOn ? "Turn Off Camera" : "Turn On Camera";
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
+      document.getElementById(tab).classList.add("active");
+    }
+
+    function notifyUser(message) {
+      if (Notification.permission === "granted") {
+        new Notification("Peer App", { body: message });
+      } else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then(permission => {
+          if (permission === "granted") {
+            new Notification("Peer App", { body: message });
+          }
+        });
+      }
+    }
+
+    window.addEventListener("load", initMedia);
+  </script>
+</body>
+</html>
